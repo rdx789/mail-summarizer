@@ -23,7 +23,7 @@ from gmail_auth import get_gmail_service          # noqa: E402  (needs load_dote
 from fetch_article import fetch_with_fallbacks    # noqa: E402
 from local_llm import generate, strip_thinking, strip_preamble  # noqa: E402
 
-SUMMARIES_DIR       = os.path.expanduser('~/Documents/email-summarized-with-skills')
+SUMMARIES_DIR       = os.path.expanduser('~/Documents/email-summarized-skills')
 LAST_RUN_PATH       = 'last_run.json'
 SUMMARIZED_LABEL    = 'summarized'
 
