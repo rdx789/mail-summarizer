@@ -6,11 +6,11 @@
 # (not "llama_server").
 # ─────────────────────────────────────────────────────────────────────────────
 
-MAIL_DIR="/Users/dron/PyCharmMiscProject/sandbox/mail-with-skills"
+MAIL_DIR="/Users/dron/PyCharmMiscProject/sandbox/mail-summarizer"
 PYTHON="$MAIL_DIR/.venv/bin/python"
 MIN_GAP=3600    # minimum seconds between runs (1 hour); prevents double-fire on quick restarts
-LOG_FILE="$HOME/Library/Logs/mail-summarizer-with-skills.log"
-GAP_FILE="$HOME/.mail_summarizer_with_skills_last_run"
+LOG_FILE="$HOME/Library/Logs/mail-summarizer-skills.log"
+GAP_FILE="$HOME/.mail_summarizer_skills_last_run"
 
 # ── Load LLM_BACKEND and its config from .env — single source of truth with main.py ──
 set -a
