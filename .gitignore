@@ -1,0 +1,14 @@
+# Secrets — never commit these
+credentials.json
+token.json
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.venv
+
+# Local run state / cache (not secrets, but not meant to be versioned)
+last_run.json
+article_cache.json
