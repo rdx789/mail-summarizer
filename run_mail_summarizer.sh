@@ -1,9 +1,8 @@
 #!/bin/bash
 # ─────────────────────────────────────────────────────────────────────────────
 # Mail Summarizer (skills variant) — wrapper script
-# Same shape as ../mail/run_mail_summarizer.sh, but LLM_BACKEND values match
-# the local-llm-backend skill's naming: "ollama" or "openai_compatible"
-# (not "llama_server").
+# LLM_BACKEND values match the local-llm-backend skill's naming:
+# "ollama" or "openai_compatible" (not "llama_server").
 # ─────────────────────────────────────────────────────────────────────────────
 
 MAIL_DIR="/Users/dron/PyCharmMiscProject/sandbox/mail-summarizer"

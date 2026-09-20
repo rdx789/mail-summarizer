@@ -1,6 +1,6 @@
 """
-Mail summarizer — same behavior as ../mail/main.py, but built on top of three
-extracted skills instead of inline implementations:
+Mail summarizer, built on top of three extracted skills instead of inline
+implementations:
   - gmail_auth.py    (gmail-oauth-bootstrap skill)
   - fetch_article.py (paywall-article-fetcher skill)
   - local_llm.py     (local-llm-backend skill, LLM_BACKEND=openai_compatible)
