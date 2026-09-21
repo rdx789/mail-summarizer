@@ -5,6 +5,7 @@ load_dotenv()`) before this module is imported, and LLM_BACKEND +
 its backend-specific variables set — see SKILL.md for the .env template.
 """
 import os
+import platform
 import re
 
 import requests
@@ -18,19 +19,35 @@ def _require_env(name):
 
 
 LLM_BACKEND = _require_env('LLM_BACKEND')
-if LLM_BACKEND not in ('ollama', 'openai_compatible'):
+if LLM_BACKEND not in ('ollama', 'openai_compatible', 'mlx_lm'):
     raise RuntimeError(
-        f"LLM_BACKEND={LLM_BACKEND!r} is not valid — set it to 'ollama' or "
-        f"'openai_compatible' in .env."
+        f"LLM_BACKEND={LLM_BACKEND!r} is not valid — set it to 'ollama', "
+        f"'openai_compatible', or 'mlx_lm' in .env."
     )
 
 if LLM_BACKEND == 'ollama':
     OLLAMA_URL   = _require_env('OLLAMA_URL')
     OLLAMA_MODEL = _require_env('OLLAMA_MODEL')
-else:
+elif LLM_BACKEND == 'openai_compatible':
     LLM_BASE_URL = _require_env('LLM_BASE_URL')
     LLM_MODEL    = _require_env('LLM_MODEL')
     LLM_API_KEY  = _require_env('LLM_API_KEY')
+else:  # mlx_lm
+    if platform.machine() != 'arm64':
+        raise RuntimeError(
+            "LLM_BACKEND=mlx_lm requires Apple Silicon (arm64) — "
+            f"detected {platform.machine()!r}."
+        )
+    MLX_MODEL = _require_env('MLX_MODEL')
+    try:
+        import mlx_lm
+        from mlx_lm.sample_utils import make_sampler as _mlx_make_sampler
+    except ImportError as exc:
+        raise RuntimeError(
+            "LLM_BACKEND=mlx_lm requires the mlx-lm package — "
+            "install it with `pip install mlx-lm`."
+        ) from exc
+    _mlx_model, _mlx_tokenizer = mlx_lm.load(MLX_MODEL)
 
 
 def strip_thinking(text):
@@ -115,12 +132,41 @@ def _generate_openai_compatible(prompt, system_prompt=None):
     return response.json()['choices'][0]['message']['content']
 
 
+def _generate_mlx_lm(prompt, system_prompt=None):
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+
+    try:
+        # Best-effort, mirrors the openai_compatible/ollama enable_thinking
+        # toggle: harmless no-op if this tokenizer's chat template doesn't
+        # recognize the kwarg.
+        rendered = _mlx_tokenizer.apply_chat_template(
+            messages, add_generation_prompt=True, enable_thinking=False,
+        )
+    except TypeError:
+        rendered = _mlx_tokenizer.apply_chat_template(
+            messages, add_generation_prompt=True,
+        )
+
+    return mlx_lm.generate(
+        _mlx_model,
+        _mlx_tokenizer,
+        prompt=rendered,
+        max_tokens=3000,  # matches the other two backends
+        sampler=_mlx_make_sampler(temp=0.3),
+    )
+
+
 def generate(prompt, system_prompt=None):
     """Call the configured local LLM backend. Returns the raw completion
     text — apply strip_thinking() and strip_preamble() yourself if you want
     a clean answer with no reasoning blocks or throwaway lead-in lines."""
     if LLM_BACKEND == 'ollama':
         return _generate_ollama(prompt, system_prompt)
+    if LLM_BACKEND == 'mlx_lm':
+        return _generate_mlx_lm(prompt, system_prompt)
     return _generate_openai_compatible(prompt, system_prompt)
 
 

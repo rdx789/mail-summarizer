@@ -2,6 +2,9 @@
 credentials.json
 token.json
 .env
+cookies.json
+medium.com_*.json
+medium_cookies.json
 
 # Python
 __pycache__/

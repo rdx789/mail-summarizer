@@ -28,7 +28,7 @@ LAST_RUN_PATH       = 'last_run.json'
 SUMMARIZED_LABEL    = 'summarized'
 
 # Cap how many article links we summarize per newsletter email.
-MAX_ARTICLES_PER_EMAIL = 10
+MAX_ARTICLES_PER_EMAIL = 20
 
 # Fetch + summarize articles within an email concurrently. llama-server's
 # default of 4 slots is the measured sweet spot on this hardware — 5 slots

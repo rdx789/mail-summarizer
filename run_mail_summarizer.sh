@@ -16,8 +16,8 @@ set -a
 # shellcheck disable=SC1091
 source "$MAIL_DIR/.env"
 set +a
-if [ "$LLM_BACKEND" != "ollama" ] && [ "$LLM_BACKEND" != "openai_compatible" ]; then
-    echo "ERROR: LLM_BACKEND='$LLM_BACKEND' in $MAIL_DIR/.env must be 'ollama' or 'openai_compatible' — aborting."
+if [ "$LLM_BACKEND" != "ollama" ] && [ "$LLM_BACKEND" != "openai_compatible" ] && [ "$LLM_BACKEND" != "mlx_lm" ]; then
+    echo "ERROR: LLM_BACKEND='$LLM_BACKEND' in $MAIL_DIR/.env must be 'ollama', 'openai_compatible', or 'mlx_lm' — aborting."
     exit 1
 fi
 if [ "$LLM_BACKEND" = "ollama" ] && { [ -z "$OLLAMA_URL" ] || [ -z "$OLLAMA_MODEL" ]; }; then
@@ -26,6 +26,10 @@ if [ "$LLM_BACKEND" = "ollama" ] && { [ -z "$OLLAMA_URL" ] || [ -z "$OLLAMA_MODE
 fi
 if [ "$LLM_BACKEND" = "openai_compatible" ] && [ -z "$LLAMA_MODEL_PATH" ]; then
     echo "ERROR: LLAMA_MODEL_PATH not set in $MAIL_DIR/.env — aborting."
+    exit 1
+fi
+if [ "$LLM_BACKEND" = "mlx_lm" ] && [ -z "$MLX_MODEL" ]; then
+    echo "ERROR: MLX_MODEL not set in $MAIL_DIR/.env — aborting."
     exit 1
 fi
 LLAMA_SERVER_BIN="${LLAMA_SERVER_BIN:-/opt/homebrew/bin/llama-server}"
@@ -62,6 +66,9 @@ if [ "$LLM_BACKEND" = "ollama" ]; then
         exit 1
     fi
     echo "  → $OLLAMA_MODEL loaded."
+elif [ "$LLM_BACKEND" = "mlx_lm" ]; then
+    # ── No server to manage — mlx_lm loads the model in-process inside main.py ──
+    echo "LLM_BACKEND=mlx_lm — model loads in-process, nothing to start."
 else
     # ── Start llama-server if not already running ──────────────────────────────
     if curl -sf "http://localhost:$LLAMA_PORT/health" | grep -q '"status":"ok"'; then
