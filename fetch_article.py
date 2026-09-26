@@ -1,4 +1,6 @@
 """
+Replica of the `paywall-article-fetcher` skill's scripts/fetch_article.py (~/.claude/skills/paywall-article-fetcher/). Keep the two copies byte-identical — edit one, then copy it over the other.
+
 Standalone utility — fetch article text from a URL with a paywall-bypass
 fallback chain. No project-specific constants; import directly.
 """
@@ -37,7 +39,7 @@ _SAME_SITE_MAP = {
 # started it — so all Medium fetches run on one dedicated single-thread
 # executor that owns the lazily-launched shared browser. Medium fetches are
 # serialized while fetches for every other domain stay fully parallel
-# across ARTICLE_WORKERS.
+# even if the caller fetches from many threads.
 _medium_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='medium-pw')
 _medium_playwright = None
 _medium_browser = None

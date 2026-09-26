@@ -1,4 +1,6 @@
 """
+Replica of the `gmail-oauth-bootstrap` skill's scripts/gmail_auth.py (~/.claude/skills/gmail-oauth-bootstrap/). Keep the two copies byte-identical — edit one, then copy it over the other.
+
 Drop-in Gmail OAuth bootstrap. Copy this into your project and edit the
 constants below to match your layout — this is a template, not a library
 meant to be imported unmodified across projects (TOKEN_PATH/CREDENTIALS_PATH
@@ -15,7 +17,8 @@ from googleapiclient.discovery import build
 # ── Edit these for your project ──────────────────────────────────────────
 SCOPES = [
     'https://www.googleapis.com/auth/gmail.readonly',
-    'https://www.googleapis.com/auth/gmail.modify',   # needed to apply "summarized" label
+    'https://www.googleapis.com/auth/gmail.modify',   # needed to apply labels / archive
+    # 'https://www.googleapis.com/auth/gmail.send',   # add if you need to send mail
 ]
 TOKEN_PATH       = 'token.json'
 CREDENTIALS_PATH = 'credentials.json'
@@ -57,3 +60,11 @@ def get_gmail_service():
             f.write(creds.to_json())
 
     return build('gmail', 'v1', credentials=creds)
+
+
+if __name__ == '__main__':
+    # Quick sanity check: authenticate and print the account's email address.
+    service = get_gmail_service()
+    profile = service.users().getProfile(userId='me').execute()
+    print(f"Authenticated as {profile['emailAddress']} "
+          f"({profile['messagesTotal']} messages in mailbox)")

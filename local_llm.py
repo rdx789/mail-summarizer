@@ -1,4 +1,6 @@
 """
+Replica of the `local-llm-backend` skill's scripts/local_llm.py (~/.claude/skills/local-llm-backend/). Keep the two copies byte-identical — edit one, then copy it over the other.
+
 Drop-in swappable local-LLM backend. Copy into your project. Requires
 .env to have already been loaded (e.g. via `from dotenv import load_dotenv;
 load_dotenv()`) before this module is imported, and LLM_BACKEND +
