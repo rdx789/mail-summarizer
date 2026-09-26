@@ -128,7 +128,7 @@ fi
 # ── Run main.py ───────────────────────────────────────────────────────────────
 echo "Running main.py..."
 cd "$MAIL_DIR" || exit 1
-"$PYTHON" main.py
+"$PYTHON" -u main.py   # -u: unbuffered, so the log shows progress live
 EXIT_CODE=$?
 echo "main.py finished (exit $EXIT_CODE)."
 
