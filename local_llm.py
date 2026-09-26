@@ -7,6 +7,7 @@ its backend-specific variables set — see SKILL.md for the .env template.
 import os
 import platform
 import re
+import threading
 
 import requests
 
@@ -48,6 +49,9 @@ else:  # mlx_lm
             "install it with `pip install mlx-lm`."
         ) from exc
     _mlx_model, _mlx_tokenizer = mlx_lm.load(MLX_MODEL)
+    # mlx_lm.generate isn't thread-safe on a shared in-process model, and
+    # main.py calls generate() from several worker threads — serialize it.
+    _mlx_lock = threading.Lock()
 
 
 def strip_thinking(text):
@@ -150,13 +154,14 @@ def _generate_mlx_lm(prompt, system_prompt=None):
             messages, add_generation_prompt=True,
         )
 
-    return mlx_lm.generate(
-        _mlx_model,
-        _mlx_tokenizer,
-        prompt=rendered,
-        max_tokens=3000,  # matches the other two backends
-        sampler=_mlx_make_sampler(temp=0.3),
-    )
+    with _mlx_lock:
+        return mlx_lm.generate(
+            _mlx_model,
+            _mlx_tokenizer,
+            prompt=rendered,
+            max_tokens=3000,  # matches the other two backends
+            sampler=_mlx_make_sampler(temp=0.3),
+        )
 
 
 def generate(prompt, system_prompt=None):

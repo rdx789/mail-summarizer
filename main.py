@@ -3,11 +3,13 @@ Mail summarizer, built on top of three extracted skills instead of inline
 implementations:
   - gmail_auth.py    (gmail-oauth-bootstrap skill)
   - fetch_article.py (paywall-article-fetcher skill)
-  - local_llm.py     (local-llm-backend skill, LLM_BACKEND=openai_compatible)
+  - local_llm.py     (local-llm-backend skill, backend chosen by LLM_BACKEND in .env)
 """
+import hashlib
 import json
 import os
 import re
+import sys
 import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -33,7 +35,9 @@ MAX_ARTICLES_PER_EMAIL = 20
 # Fetch + summarize articles within an email concurrently. llama-server's
 # default of 4 slots is the measured sweet spot on this hardware — 5 slots
 # was actually *slower* wall-clock (memory-bandwidth contention outweighed
-# the extra parallelism), so don't bump this without re-benchmarking.
+# the extra parallelism), so don't bump this without re-benchmarking. Under
+# mlx_lm, generation is serialized by a lock in local_llm.py, so extra
+# workers only overlap the network fetches.
 ARTICLE_WORKERS = 4
 
 EXCLUDED_SENDERS_PATH = 'excluded_senders.json'
@@ -68,15 +72,25 @@ def load_article_cache():
 
 def save_article_cache(cache):
     data = {'date': datetime.now().strftime('%Y-%m-%d'), 'urls': cache}
-    with open(ARTICLE_CACHE_PATH, 'w', encoding='utf-8') as f:
-        json.dump(data, f)
+    try:
+        with _article_cache_lock, open(ARTICLE_CACHE_PATH, 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+    except (OSError, TypeError) as exc:
+        print(f"  ⚠  Could not save article cache: {exc}")
 
 
 def load_excluded_senders():
     if not os.path.exists(EXCLUDED_SENDERS_PATH):
         return set()
-    with open(EXCLUDED_SENDERS_PATH, encoding='utf-8') as f:
-        data = json.load(f)
+    try:
+        with open(EXCLUDED_SENDERS_PATH, encoding='utf-8') as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"  ⚠  Could not read {EXCLUDED_SENDERS_PATH}: {exc} — no senders excluded.")
+        return set()
+    if not isinstance(data, list):
+        print(f"  ⚠  {EXCLUDED_SENDERS_PATH} must be a JSON list — no senders excluded.")
+        return set()
     return {s.strip() for s in data if isinstance(s, str) and s.strip()}
 
 
@@ -159,7 +173,7 @@ def sender_slug(name):
     slug = re.sub(r'[^\w\s-]', '', ascii_only.lower())
     slug = re.sub(r'[\s_]+', '-', slug).strip('-')
     if not slug:
-        slug = f'sender-{abs(hash(name)) % 99999}'
+        slug = 'sender-' + hashlib.md5(name.encode('utf-8')).hexdigest()[:8]
     return slug[:50]
 
 
@@ -204,7 +218,11 @@ def parse_and_clean_email_body(gmail_service, user_id, message_id):
             tag.decompose()
         content = soup.get_text(separator=' ')
 
-    cleaned = strip_tracking_links(truncate_reply_chains(content) if content else '')
+    # Reply-chain truncation only makes sense for personal mail; newsletters
+    # routinely contain lines like "From: the editors" mid-body.
+    if content and not is_bulk:
+        content = truncate_reply_chains(content)
+    cleaned = strip_tracking_links(content or '')
     story_links = extract_story_links(raw_html) if raw_html and is_bulk else []
 
     return {
@@ -267,6 +285,16 @@ def extract_paywall_article_urls(raw_html):
     return found
 
 
+def collect_links(em):
+    all_links = list(em['story_links'])
+    seen_urls = {l['url'] for l in all_links}
+    for pl in extract_paywall_article_urls(em['raw_html']):
+        if pl['url'] not in seen_urls:
+            all_links.append(pl)
+            seen_urls.add(pl['url'])
+    return all_links
+
+
 # ---------------------------------------------------------------------------
 # Summarization (via local_llm skill)
 # ---------------------------------------------------------------------------
@@ -274,6 +302,9 @@ def extract_paywall_article_urls(raw_html):
 def load_summary_prompt(path='post-prompt.md'):
     with open(path, encoding='utf-8') as f:
         return f.read().strip()
+
+
+FAILED_PREFIX = '*(could not summarize'
 
 
 def summarize(content, system_prompt):
@@ -291,13 +322,16 @@ def process_link(link, body, summary_prompt, cache):
     if cached is not None:
         return cached['source'], cached['hit_paywall'], cached['summary']
 
-    content, source, hit_paywall = fetch_with_fallbacks(link['url'], body)
+    try:
+        content, source, hit_paywall = fetch_with_fallbacks(link['url'], body)
+    except Exception as exc:
+        return 'fallback', False, f"{FAILED_PREFIX}: fetch failed: {exc})*"
     try:
         summary = summarize(content, summary_prompt)
     except Exception as exc:
         # Don't cache — a transient network/LLM failure should be retried
         # on the next run, not permanently stuck as the cached result.
-        return source, hit_paywall, f"*(could not summarize: {exc})*"
+        return source, hit_paywall, f"{FAILED_PREFIX}: {exc})*"
 
     with _article_cache_lock:
         cache[url] = {'source': source, 'hit_paywall': hit_paywall, 'summary': summary}
@@ -308,7 +342,7 @@ def summarize_body(body, summary_prompt):
     try:
         return summarize(body, summary_prompt)
     except Exception as exc:
-        return f"*(could not summarize: {exc})*"
+        return f"{FAILED_PREFIX}: {exc})*"
 
 
 # ---------------------------------------------------------------------------
@@ -322,8 +356,8 @@ def strip_tracking_links(text):
 
 def truncate_reply_chains(text):
     patterns = [
-        r'-\s*Original Message\s*-', r'From:\s*.*',
-        r'On\s+.*?\s+wrote:', r'________________________________', r'^\s*>+.*',
+        r'-\s*Original Message\s*-', r'^\s*From:\s.*',
+        r'^\s*On\s+.*?\s+wrote:\s*$', r'________________________________', r'^\s*>+.*',
     ]
     lines = []
     for line in text.splitlines():
@@ -399,16 +433,38 @@ if __name__ == '__main__':
         after_ts = int((datetime.now() - timedelta(days=1)).timestamp())
         print("No cursor — fetching last 1 days.")
 
-    results  = service.users().messages().list(userId='me', q=f'in:inbox after:{after_ts}').execute()
-    messages = results.get('messages', [])
+    messages, page_token = [], None
+    try:
+        while True:
+            results = service.users().messages().list(
+                userId='me', q=f'in:inbox after:{after_ts}', pageToken=page_token,
+            ).execute()
+            messages.extend(results.get('messages', []))
+            page_token = results.get('nextPageToken')
+            if not page_token:
+                break
+    except Exception as exc:
+        print(f"Could not list emails: {exc}")
+        sys.exit(1)
     if not messages:
         print("No new emails.")
-        exit(0)
+        sys.exit(0)
 
     all_emails = []
+    failed_ms = []  # internalDate of messages we couldn't parse (0 = unknown)
     for i, msg in enumerate(messages, 1):
         print(f"\rParsing {i}/{len(messages)}...", end='', flush=True)
-        parsed = parse_and_clean_email_body(service, 'me', msg['id'])
+        try:
+            parsed = parse_and_clean_email_body(service, 'me', msg['id'])
+        except Exception as exc:
+            print(f"\n  ⚠  Could not parse {msg['id']}: {exc}")
+            try:
+                meta = service.users().messages().get(
+                    userId='me', id=msg['id'], format='minimal').execute()
+                failed_ms.append(int(meta.get('internalDate', 0)))
+            except Exception:
+                failed_ms.append(0)
+            continue
         if cursor_ms and parsed['internal_date_ms'] <= cursor_ms:
             continue
         all_emails.append(parsed)
@@ -473,12 +529,7 @@ if __name__ == '__main__':
 
             email_plans = []
             for em in sender_emails:
-                all_links = list(em['story_links'])
-                seen_urls = {l['url'] for l in all_links}
-                for pl in extract_paywall_article_urls(em['raw_html']):
-                    if pl['url'] not in seen_urls:
-                        all_links.append(pl)
-                        seen_urls.add(pl['url'])
+                all_links = collect_links(em)
 
                 capped = all_links[:MAX_ARTICLES_PER_EMAIL]
 
@@ -514,12 +565,7 @@ if __name__ == '__main__':
                               "listed but not summarized.*\n\n")
                     for em in sender_emails:
                         out.write(f"## {em['subject']}\n\n")
-                        all_links = list(em['story_links'])
-                        seen_urls = {l['url'] for l in all_links}
-                        for pl in extract_paywall_article_urls(em['raw_html']):
-                            if pl['url'] not in seen_urls:
-                                all_links.append(pl)
-                                seen_urls.add(pl['url'])
+                        all_links = collect_links(em)
                         total_links += len(all_links)
                         for link in all_links:
                             out.write(f"- [{link['title']}]({link['url']})\n")
@@ -564,7 +610,8 @@ if __name__ == '__main__':
                             out.write(f"{paywall_note}\n")
                             out.write(f"{summary}\n\n")
                             out.write("---\n\n")
-                            summarized_count += 1
+                            if not summary.startswith(FAILED_PREFIX):
+                                summarized_count += 1
 
                     else:
                         summary = payload.result()
@@ -600,6 +647,15 @@ if __name__ == '__main__':
 
     article_pool.shutdown(wait=True)
     save_article_cache(article_cache)
+
+    if failed_ms:
+        # Hold the cursor just before the earliest unparsed email so the next
+        # run retries it (emails after it are re-processed too — harmless,
+        # their output files are simply rewritten).
+        hold = max(min(failed_ms) - 1, cursor_ms or 0)
+        if hold < newest_date_ms:
+            print(f"\n⚠  {len(failed_ms)} email(s) failed to parse — cursor held back to retry them.")
+            newest_date_ms = hold
 
     if newest_date_ms > (cursor_ms or 0):
         save_cursor(newest_date_ms)

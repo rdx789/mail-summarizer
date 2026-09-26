@@ -5,9 +5,9 @@ fallback chain. No project-specific constants; import directly.
 import json
 import os
 import re
-import threading
 import time
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 
 import requests
@@ -22,8 +22,7 @@ BROWSER_USER_AGENT = (
 
 # Cookies exported from a logged-in medium.com session (plain JSON, e.g. via
 # a browser cookie-export extension — NOT the encrypted "Cookie Manager"
-# format). See test_first_email.py / the mail-summarizer README for how to
-# export these. Gitignored — this is a live session credential.
+# format). Gitignored — this is a live session credential (chmod 600).
 MEDIUM_COOKIES_PATH = 'medium_cookies.json'
 
 _SAME_SITE_MAP = {
@@ -34,10 +33,12 @@ _SAME_SITE_MAP = {
 # (confirmed: even the bare homepage 403s, even with a browser User-Agent
 # and valid session cookies attached via HTTP headers). Only a real browser
 # engine gets past it. Playwright's sync API is not thread-safe across
-# threads, so all Medium fetches funnel through one lazily-launched shared
-# browser guarded by this lock — Medium fetches are serialized while
-# fetches for every other domain stay fully parallel across ARTICLE_WORKERS.
-_medium_lock = threading.Lock()
+# threads — the browser must only ever be touched from the thread that
+# started it — so all Medium fetches run on one dedicated single-thread
+# executor that owns the lazily-launched shared browser. Medium fetches are
+# serialized while fetches for every other domain stay fully parallel
+# across ARTICLE_WORKERS.
+_medium_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='medium-pw')
 _medium_playwright = None
 _medium_browser = None
 
@@ -158,7 +159,7 @@ def _load_medium_cookies():
 def _get_medium_browser():
     """Lazily launches one shared headless Chromium instance, reused across
     the run (launching a fresh browser per article would be far slower).
-    Must only be called while holding _medium_lock."""
+    Must only be called from _medium_executor's thread."""
     global _medium_playwright, _medium_browser
     if _medium_browser is None:
         from playwright.sync_api import sync_playwright
@@ -178,23 +179,26 @@ def _try_medium_playwright(url, timeout=20):
     cookies = _load_medium_cookies()
     if cookies is None:
         return None  # not configured — let the caller fall through
+    return _medium_executor.submit(_medium_fetch, url, cookies, timeout).result()
 
-    with _medium_lock:
-        browser = _get_medium_browser()
-        context = browser.new_context(
-            user_agent=BROWSER_USER_AGENT, viewport={'width': 1280, 'height': 800},
+
+def _medium_fetch(url, cookies, timeout):
+    """Runs on _medium_executor's single thread, which owns the browser."""
+    browser = _get_medium_browser()
+    context = browser.new_context(
+        user_agent=BROWSER_USER_AGENT, viewport={'width': 1280, 'height': 800},
+    )
+    try:
+        context.add_cookies(cookies)
+        page = context.new_page()
+        page.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
         )
-        try:
-            context.add_cookies(cookies)
-            page = context.new_page()
-            page.add_init_script(
-                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-            )
-            page.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
-            page.wait_for_timeout(3000)  # let client-rendered content settle
-            text = page.inner_text('body')
-        finally:
-            context.close()
+        page.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
+        page.wait_for_timeout(3000)  # let client-rendered content settle
+        text = page.inner_text('body')
+    finally:
+        context.close()
     return re.sub(r'\s+', ' ', text).strip()
 
 

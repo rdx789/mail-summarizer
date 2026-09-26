@@ -5,7 +5,7 @@
 # "ollama" or "openai_compatible" (not "llama_server").
 # ─────────────────────────────────────────────────────────────────────────────
 
-MAIL_DIR="/Users/dron/PyCharmMiscProject/sandbox/mail-summarizer"
+MAIL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON="$MAIL_DIR/.venv/bin/python"
 MIN_GAP=3600    # minimum seconds between runs (1 hour); prevents double-fire on quick restarts
 LOG_FILE="$HOME/Library/Logs/mail-summarizer-skills.log"
@@ -41,6 +41,22 @@ echo ""
 echo "═══════════════════════════════════════════════════"
 echo "  Mail Summarizer (skills)  $(date '+%Y-%m-%d %H:%M:%S')"
 echo "═══════════════════════════════════════════════════"
+
+# ── Single-instance lock — a run can outlast MIN_GAP, so the gap check alone
+#    doesn't prevent two runs (and two in-memory models) overlapping ───────────
+LOCK_DIR="$HOME/.mail_summarizer_skills.lock"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    OLD_PID=$(cat "$LOCK_DIR/pid" 2>/dev/null)
+    if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
+        echo "Another run (PID $OLD_PID) is still in progress — skipping."
+        exit 0
+    fi
+    echo "Removing stale lock (PID ${OLD_PID:-unknown})."
+    rm -rf "$LOCK_DIR"
+    mkdir "$LOCK_DIR" || exit 1
+fi
+echo $$ > "$LOCK_DIR/pid"
+trap 'rm -rf "$LOCK_DIR"' EXIT
 
 # ── Minimum gap check ─────────────────────────────────────────────────────────
 NOW=$(date +%s)

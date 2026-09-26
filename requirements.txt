@@ -1,0 +1,9 @@
+beautifulsoup4==4.15.0
+google-api-python-client==2.198.0
+google-auth==2.56.2
+google-auth-httplib2==0.4.0
+google-auth-oauthlib==1.4.0
+mlx-lm==0.31.3
+playwright==1.63.0
+python-dotenv==1.2.2
+requests==2.34.2

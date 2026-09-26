@@ -15,3 +15,6 @@ __pycache__/
 # Local run state / cache (not secrets, but not meant to be versioned)
 last_run.json
 article_cache.json
+
+# IDE
+.idea/
