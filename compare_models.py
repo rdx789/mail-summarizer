@@ -130,16 +130,56 @@ def _numbers(text):
     return found
 
 
+_UNITS = {w: i for i, w in enumerate(
+    'zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen '
+    'sixteen seventeen eighteen nineteen'.split())}
+_TENS = {w: 10 * i for i, w in enumerate('_ _ twenty thirty forty fifty sixty seventy eighty ninety'.split())}
+_SCALES = {'hundred': 100, 'thousand': 1000, 'million': 10**6, 'billion': 10**9}
+
+
+def _word_numbers(text):
+    """Numbers the source spells out ("three-thousand", "twenty five"), as digit strings."""
+    found, total, current, in_num = set(), 0, 0, False
+
+    def flush():
+        nonlocal total, current, in_num
+        if in_num and total + current >= 10:  # single digits are ignored, like _numbers() does
+            found.add(str(total + current))
+        total, current, in_num = 0, 0, False
+
+    for w in re.findall(r'[a-z]+|[^a-z\s-]', text.lower()):  # hyphens/spaces join number words, other punctuation ends the number
+        if w in _UNITS or w in _TENS:
+            current += _UNITS.get(w, 0) + _TENS.get(w, 0)
+            in_num = True
+        elif w in _SCALES and in_num:
+            if _SCALES[w] == 100:
+                current *= 100
+            else:
+                total, current = total + current * _SCALES[w], 0
+        else:
+            flush()
+    flush()
+    return found
+
+
+def _code_key(text):
+    """Whitespace-insensitive form of code: formatters differ on spaces inside
+    brackets and after commas/colons, which doesn't change the code."""
+    text = re.sub(r'\s+', ' ', text)
+    return re.sub(r' ?([()\[\]{},:]) ?', r'\1', text).strip()
+
+
 def _accuracy(summary, source):
     """Cheap fidelity checks against the source text. Not a quality score —
     they catch invented numbers and altered code, nothing subtler."""
     src = source.replace(',', '')
+    spelled = _word_numbers(source)
     nums = _numbers(summary)
-    bad_nums = sorted(n for n in nums if n.rstrip('%') not in src)
+    bad_nums = sorted(n for n in nums if n.rstrip('%') not in src and n.rstrip('%') not in spelled)
     code_lines = [ln.strip() for blk in re.findall(r'```.*?\n(.*?)```', summary, re.S)
                   for ln in blk.splitlines() if len(ln.strip()) >= 8]
-    src_flat = re.sub(r'\s+', ' ', source)
-    bad_code = [ln for ln in code_lines if re.sub(r'\s+', ' ', ln) not in src_flat]
+    src_key = _code_key(source)
+    bad_code = [ln for ln in code_lines if _code_key(ln) not in src_key]
     return nums, bad_nums, code_lines, bad_code
 
 
