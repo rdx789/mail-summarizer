@@ -305,6 +305,12 @@ def load_summary_prompt(path='post-prompt.md'):
 
 
 FAILED_PREFIX = '*(could not summarize'
+SKIPPED_PREFIX = 'SKIPPED:'  # post-prompt.md rule 1: model's reply for incomplete/off-topic posts
+
+
+def is_skipped(summary):
+    # Tolerate markdown the model may wrap around the marker (`SKIPPED:`, **SKIPPED:**).
+    return summary.lstrip(' \t\n*`_').startswith(SKIPPED_PREFIX)
 
 
 def summarize(content, system_prompt):
@@ -377,7 +383,7 @@ def _day_label(date_str):
 
 
 def write_day_index(day_dir, date_str, sender_rows, body_only_rows,
-                    excluded_rows, skipped_rows):
+                    excluded_rows, skipped_rows, filtered_rows=()):
     path = os.path.join(day_dir, '_index.md')
     with open(path, 'w', encoding='utf-8') as f:
         f.write(f"# {_day_label(date_str)}\n\n")
@@ -403,6 +409,14 @@ def write_day_index(day_dir, date_str, sender_rows, body_only_rows,
             f.write("|---|---|---|\n")
             for row in excluded_rows:
                 f.write(f"| {row['sender']} | {row['emails']} | {row['links']} |\n")
+            f.write("\n")
+
+        if filtered_rows:
+            f.write("## Filtered out by prompt — incomplete or off-topic\n\n")
+            for row in filtered_rows:
+                f.write(f"- {row['sender']} · {row['subject']}"
+                        f"{' · ' + row['title'] if row.get('title') else ''}"
+                        f" — {row['reason']}\n")
             f.write("\n")
 
         if skipped_rows:
@@ -511,6 +525,7 @@ if __name__ == '__main__':
         sender_rows    = []
         body_only_rows = []
         excluded_rows  = []
+        filtered_rows  = []
         skipped_rows   = [{'sender': e['sender_name'], 'subject': e['subject']}
                           for e in transactional]
 
@@ -599,6 +614,13 @@ if __name__ == '__main__':
 
                         for link, future in zip(capped, payload):
                             source, hit_paywall, summary = future.result()
+                            if is_skipped(summary):
+                                filtered_rows.append({
+                                    'sender': sender_name, 'subject': em['subject'],
+                                    'title': link['title'],
+                                    'reason': summary.strip(' \t\n*`_').split('\n')[0],
+                                })
+                                continue
                             paywall_note = (
                                 "\n> ⚠️ **Paywalled** — summary based on free preview "
                                 "only. Full article not retrievable.\n"
@@ -615,12 +637,18 @@ if __name__ == '__main__':
 
                     else:
                         summary = payload.result()
-                        out.write(f"{summary}\n\n")
-                        out.write("---\n\n")
-                        body_only_rows.append({
-                            'sender':  sender_name,
-                            'subject': em['subject'],
-                        })
+                        if is_skipped(summary):
+                            filtered_rows.append({
+                                'sender': sender_name, 'subject': em['subject'],
+                                'reason': summary.strip(' \t\n*`_').split('\n')[0],
+                            })
+                        else:
+                            out.write(f"{summary}\n\n")
+                            out.write("---\n\n")
+                            body_only_rows.append({
+                                'sender':  sender_name,
+                                'subject': em['subject'],
+                            })
 
                     apply_label(service, em['message_id'], label_id)
                     newest_date_ms = max(newest_date_ms, em['internal_date_ms'])
@@ -634,7 +662,7 @@ if __name__ == '__main__':
                 })
 
         write_day_index(day_dir, date_str, sender_rows, body_only_rows,
-                        excluded_rows, skipped_rows)
+                        excluded_rows, skipped_rows, filtered_rows)
         print(f"\n  ✓ {date_str}/ written  ({len(sender_rows)} newsletter files + _index.md)")
 
         # Persist incrementally after each day, not just at the very end —
