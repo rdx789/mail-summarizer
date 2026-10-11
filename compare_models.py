@@ -12,6 +12,7 @@ first one's memory is fully released before the next loads).
 """
 import json
 import os
+import re
 import sys
 import time
 
@@ -81,17 +82,65 @@ def run(model):
         sample = json.load(f)
     prompt = load_summary_prompt()
 
+    # Capture mlx_lm's own speed stats without touching local_llm.py: swap its
+    # mlx_lm.generate for a stream_generate wrapper that returns the same text
+    # (same rendered prompt, max_tokens and sampler) and records the last stats.
+    import mlx.core as mx
+    import local_llm
+    stats = {}
+    real_mlx_lm = local_llm.mlx_lm
+
+    class _Timed:
+        def __getattr__(self, name):
+            return getattr(real_mlx_lm, name)
+
+        @staticmethod
+        def generate(m, tok, prompt, **kw):
+            text, last = '', None
+            for last in real_mlx_lm.stream_generate(m, tok, prompt=prompt, **kw):
+                text += last.text
+            stats.update(prompt_tokens=last.prompt_tokens, prompt_tps=last.prompt_tps,
+                         gen_tokens=last.generation_tokens, gen_tps=last.generation_tps,
+                         peak_gb=mx.get_peak_memory() / 1e9)
+            return text
+
     generate("Say ok.", system_prompt="Be terse.")  # warm-up, keeps load/compile time out of the timing
+    local_llm.mlx_lm = _Timed()
     t0 = time.perf_counter()
     raw = generate(sample['content'], system_prompt=prompt)
     elapsed = time.perf_counter() - t0
+    local_llm.mlx_lm = real_mlx_lm
     summary = strip_preamble(strip_thinking(raw))
 
     out = {'model': model, 'seconds': round(elapsed, 1), 'chars': len(summary),
-           'summary': summary}
+           'summary': summary, 'raw_chars': len(raw), **{k: round(v, 2) for k, v in stats.items()}}
     with open(os.path.join(WORK_DIR, f'result-{_slug(model)}.json'), 'w', encoding='utf-8') as f:
         json.dump(out, f)
-    print(f"{model}: {elapsed:.1f}s, {len(summary)} chars")
+    print(f"{model}: {elapsed:.1f}s, {stats.get('gen_tokens')} tok @ {stats.get('gen_tps', 0):.1f} tok/s decode, "
+          f"{stats.get('prompt_tps', 0):.0f} tok/s prefill, {len(summary)} chars")
+
+
+def _numbers(text):
+    """Numbers worth checking: 2+ digits, or with a decimal point/percent sign."""
+    found = set()
+    for m in re.findall(r'\d[\d,]*\.?\d*%?', text):
+        m = m.rstrip('.,').replace(',', '')
+        if len(re.sub(r'\D', '', m)) >= 2 or '.' in m or '%' in m:
+            found.add(m)
+    return found
+
+
+def _accuracy(summary, source):
+    """Cheap fidelity checks against the source text. Not a quality score —
+    they catch invented numbers and altered code, nothing subtler."""
+    src = source.replace(',', '')
+    nums = _numbers(summary)
+    bad_nums = sorted(n for n in nums if n.rstrip('%') not in src)
+    code_lines = [ln.strip() for blk in re.findall(r'```.*?\n(.*?)```', summary, re.S)
+                  for ln in blk.splitlines() if len(ln.strip()) >= 8]
+    src_flat = re.sub(r'\s+', ' ', source)
+    bad_code = [ln for ln in code_lines if re.sub(r'\s+', ' ', ln) not in src_flat]
+    return nums, bad_nums, code_lines, bad_code
 
 
 def report():
@@ -105,10 +154,15 @@ def report():
     sections = ['TL;DR', 'Problem & Context', 'Solution & Architecture',
                 'Code & Implementation', 'Results & Trade-offs', 'Key Takeaways']
     lines = [f"# {sample['title']}\n", f"{sample['url']} · {len(sample['content'])} chars input\n",
-             "| Model | Time | Chars | Sections present |", "|---|---|---|---|"]
+             "| Model | Time | Out tokens | Decode tok/s | Prefill tok/s | Peak GB | Chars | Sections | "
+             "Numbers not in source | Code lines not in source |",
+             "|---|---|---|---|---|---|---|---|---|---|"]
     for r in results:
         have = sum(s in r['summary'] for s in sections)
-        lines.append(f"| {r['model']} | {r['seconds']}s | {r['chars']} | {have}/{len(sections)} |")
+        nums, bad_nums, code, bad_code = _accuracy(r['summary'], sample['content'])
+        lines.append(f"| {r['model']} | {r['seconds']}s | {r.get('gen_tokens', '?')} | {r.get('gen_tps', '?')} | "
+                     f"{r.get('prompt_tps', '?')} | {r.get('peak_gb', '?')} | {r['chars']} | {have}/{len(sections)} | "
+                     f"{len(bad_nums)}/{len(nums)} {bad_nums[:6]} | {len(bad_code)}/{len(code)} |")
     for r in results:
         lines += ["", f"## {r['model']}", "", r['summary']]
     path = os.path.join(WORK_DIR, 'comparison.md')
