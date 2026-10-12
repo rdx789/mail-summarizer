@@ -71,7 +71,7 @@ def detect_paywall(text):
     return any(re.search(p, tail) for p in PAYWALL_PATTERNS)
 
 
-def html_to_text(html, cap=10000):
+def html_to_text(html, cap=25000):
     soup = BeautifulSoup(html, 'html.parser')
     for tag in soup(['script', 'style', 'nav', 'footer', 'header']):
         tag.decompose()
