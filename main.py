@@ -313,10 +313,37 @@ def is_skipped(summary):
     return summary.lstrip(' \t\n*`_').startswith(SKIPPED_PREFIX)
 
 
-def summarize(content, system_prompt):
+TOPIC_PROMPT_PATH = 'topic-prompt.md'
+TOPIC_SNIPPET_CHARS = 4000  # the beginning of a post is enough to tell its subject
+
+
+def classify_topic(content, title=''):
+    """True if the post is in scope. Done as its own call because the model
+    applied the topic filter unreliably when it was one rule among many in
+    the summary prompt. Fails open: if the call or its answer is unusable,
+    the post is summarized rather than silently dropped."""
+    try:
+        with open(TOPIC_PROMPT_PATH, encoding='utf-8') as f:
+            topic_prompt = f.read().strip()
+        raw = generate(f"Title: {title}\n\nText:\n{content[:TOPIC_SNIPPET_CHARS]}",
+                       system_prompt=topic_prompt)
+        answer = strip_preamble(strip_thinking(raw)).strip(' \t\n*`_."').upper()
+    except Exception as exc:
+        print(f"  topic check failed ({exc}); summarizing anyway", flush=True)
+        return True
+    if answer.startswith('NO'):
+        return False
+    if not answer.startswith('YES'):
+        print(f"  topic check gave unusable answer {answer[:40]!r}; summarizing anyway", flush=True)
+    return True
+
+
+def summarize(content, system_prompt, title=''):
     # No "/no_think" prefix: it's ignored by newer thinking models (e.g.
     # Qwen3.6) — thinking is disabled properly via local_llm.py's
     # chat_template_kwargs instead.
+    if not classify_topic(content, title):
+        return f"{SKIPPED_PREFIX} off-topic"
     raw = generate(content, system_prompt=system_prompt)
     return strip_preamble(strip_thinking(raw))
 
@@ -333,7 +360,7 @@ def process_link(link, body, summary_prompt, cache):
     except Exception as exc:
         return 'fallback', False, f"{FAILED_PREFIX}: fetch failed: {exc})*"
     try:
-        summary = summarize(content, summary_prompt)
+        summary = summarize(content, summary_prompt, link['title'])
     except Exception as exc:
         # Don't cache — a transient network/LLM failure should be retried
         # on the next run, not permanently stuck as the cached result.
@@ -344,9 +371,9 @@ def process_link(link, body, summary_prompt, cache):
     return source, hit_paywall, summary
 
 
-def summarize_body(body, summary_prompt):
+def summarize_body(body, summary_prompt, title=''):
     try:
-        return summarize(body, summary_prompt)
+        return summarize(body, summary_prompt, title)
     except Exception as exc:
         return f"{FAILED_PREFIX}: {exc})*"
 
@@ -559,7 +586,7 @@ if __name__ == '__main__':
                     email_plans.append((em, all_links, capped, futures))
                 else:
                     print(f"\n  {sender_name} · {em['subject'][:50]}  [body only]")
-                    future = article_pool.submit(summarize_body, em['body'], summary_prompt)
+                    future = article_pool.submit(summarize_body, em['body'], summary_prompt, em['subject'])
                     email_plans.append((em, None, None, future))
             sender_plans[sender_name] = email_plans
 
