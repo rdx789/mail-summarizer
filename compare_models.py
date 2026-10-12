@@ -169,6 +169,16 @@ def _code_key(text):
     return re.sub(r' ?([()\[\]{},:]) ?', r'\1', text).strip()
 
 
+_COMMENT_ONLY = re.compile(r'^(#(?!!|include\b|define\b|if\b|ifdef\b|ifndef\b|endif\b|pragma\b)|//|/\*|\*/)')
+
+
+def _is_comment_only(line):
+    """Models often add `# Install X` above a real command. That is annotation,
+    not altered code, so it isn't held against the summary. Shebangs and C
+    preprocessor lines start with # but are code."""
+    return bool(_COMMENT_ONLY.match(line))
+
+
 def _accuracy(summary, source):
     """Cheap fidelity checks against the source text. Not a quality score —
     they catch invented numbers and altered code, nothing subtler."""
@@ -177,7 +187,7 @@ def _accuracy(summary, source):
     nums = _numbers(summary)
     bad_nums = sorted(n for n in nums if n.rstrip('%') not in src and n.rstrip('%') not in spelled)
     code_lines = [ln.strip() for blk in re.findall(r'```.*?\n(.*?)```', summary, re.S)
-                  for ln in blk.splitlines() if len(ln.strip()) >= 8]
+                  for ln in blk.splitlines() if len(ln.strip()) >= 8 and not _is_comment_only(ln.strip())]
     src_key = _code_key(source)
     bad_code = [ln for ln in code_lines if _code_key(ln) not in src_key]
     return nums, bad_nums, code_lines, bad_code
