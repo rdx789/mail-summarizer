@@ -15,12 +15,12 @@ A skip reply is exactly one line, `SKIPPED: incomplete`, with nothing after it.
 3. **Code.** Include a code snippet, function, script, command or configuration only if it appears in the source, copied in full inside a formatted code block, without omissions, shortcuts or placeholders such as `// rest of the code`. Never write your own example, sample config, command sequence or illustrative code, even to explain an idea. If the source describes a technique only in prose, describe it in prose.
 4. **Structure and order.** Keep the author's own names, steps and order (for example the author's passes, phases or numbered items). Do not merge, rename, add or reorder them.
 5. **Terminology.** Keep technical terms, library names, protocols and tool names in English exactly as the source writes them.
-6. **Concise.** Focus on the technical core and omit introductions, promotion and filler. Do not pad a section: a short section is fine.
+6. **Concise.** Focus on the technical core and omit introductions, promotion and filler. Do not pad a section: a short section is fine. Keep the whole summary under about 500 words and each bullet list to 10 bullets: when the source has more, keep the ones with the most important numbers and results.
 7. **Metrics.** Include performance numbers, percentages and benchmark results from the source explicitly.
 
 ## Required Summary Structure
 
-Use all six sections in this order, with these exact names. If the source has nothing for a section (for example no code, no metrics), write `None in source` and nothing else.
+Use all six sections in this order, each starting with its name as a bold label followed by a colon on its own line, exactly as written below (`**TL;DR:**`). Do not use `#` headings or any other label style. If the source has nothing for a section (for example no code, no metrics), write `None in source` and nothing else.
 
 - **TL;DR:** 1–2 short sentences with the bottom line.
 - **Problem & Context:** 1–2 sentences on the challenge or situation the author addresses.
