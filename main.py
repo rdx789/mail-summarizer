@@ -10,13 +10,16 @@ import json
 import os
 import re
 import sys
+import random
 import threading
+import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, parse_qs
 
 from bs4 import BeautifulSoup
+from googleapiclient.errors import HttpError
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -131,6 +134,39 @@ def save_cursor(internal_date_ms):
 # Gmail label helpers (auth itself comes from gmail_auth.get_gmail_service)
 # ---------------------------------------------------------------------------
 
+# Gmail's per-minute quota error: 403 with one of these reasons (or 429). A daily
+# limit is not listed because waiting a minute would not clear it.
+QUOTA_REASONS = {'rateLimitExceeded', 'userRateLimitExceeded', 'quotaExceeded'}
+
+
+def is_quota_error(exc):
+    if exc.resp.status == 429:
+        return True
+    if exc.resp.status != 403:
+        return False
+    try:
+        return any(e.get('reason') in QUOTA_REASONS for e in json.loads(exc.content)['error']['errors'])
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return False
+
+
+def gmail_execute(request, attempts=5):
+    """Run a Gmail API request, retrying quota errors and 5xx.
+
+    Gmail's per-minute quota resets within a minute, so backoff starts at 5s
+    (5, 10, 20, 40s + jitter, ~75s total); other errors fail immediately.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            return request.execute()
+        except HttpError as exc:
+            if attempt == attempts or not (is_quota_error(exc) or exc.resp.status in (500, 502, 503, 504)):
+                raise
+            delay = 5 * 2 ** (attempt - 1) + random.uniform(0, 2)
+            print(f"\n  Gmail {exc.resp.status} (attempt {attempt}/{attempts}) — retrying in {delay:.0f}s")
+            time.sleep(delay)
+
+
 def get_or_create_label(service, name):
     labels = service.users().labels().list(userId='me').execute().get('labels', [])
     for label in labels:
@@ -180,9 +216,9 @@ def sender_slug(name):
 def parse_and_clean_email_body(gmail_service, user_id, message_id):
     import base64
 
-    message = gmail_service.users().messages().get(
+    message = gmail_execute(gmail_service.users().messages().get(
         userId=user_id, id=message_id, format='full'
-    ).execute()
+    ))
 
     payload  = message.get('payload', {})
     headers  = payload.get('headers', [])
@@ -477,9 +513,9 @@ if __name__ == '__main__':
     messages, page_token = [], None
     try:
         while True:
-            results = service.users().messages().list(
+            results = gmail_execute(service.users().messages().list(
                 userId='me', q=f'in:inbox after:{after_ts}', pageToken=page_token,
-            ).execute()
+            ))
             messages.extend(results.get('messages', []))
             page_token = results.get('nextPageToken')
             if not page_token:
@@ -499,9 +535,15 @@ if __name__ == '__main__':
             parsed = parse_and_clean_email_body(service, 'me', msg['id'])
         except Exception as exc:
             print(f"\n  ⚠  Could not parse {msg['id']}: {exc}")
+            if isinstance(exc, HttpError) and is_quota_error(exc):
+                # Retries are used up: stop instead of waiting ~75s per remaining
+                # email. Date 0 holds the cursor, so the rest is retried next run.
+                print("  Gmail quota still exhausted — stopping; the rest will be retried next run.")
+                failed_ms.append(0)
+                break
             try:
-                meta = service.users().messages().get(
-                    userId='me', id=msg['id'], format='minimal').execute()
+                meta = gmail_execute(service.users().messages().get(
+                    userId='me', id=msg['id'], format='minimal'))
                 failed_ms.append(int(meta.get('internalDate', 0)))
             except Exception:
                 failed_ms.append(0)
