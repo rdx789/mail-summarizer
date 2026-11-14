@@ -147,5 +147,8 @@ elif $LLAMA_STARTED_BY_US; then
     echo "llama-server stopped."
 fi
 
+# Success stamp read by check_alive.sh (the watchdog) — only written when main.py exited 0.
+[ "$EXIT_CODE" -eq 0 ] && date +%s > "$HOME/.mail_summarizer_skills_last_ok"
+
 echo "Done  $(date '+%Y-%m-%d %H:%M:%S')"
 exit $EXIT_CODE
