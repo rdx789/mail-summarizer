@@ -66,6 +66,20 @@ class NetworkDown(unittest.TestCase):
              mock.patch.object(fetch_article, '_try_12ft', side_effect=requests.Timeout()):
             self.assertEqual(fetch_article.fetch_with_fallbacks('https://example.com/a', 'body', verbose=False)[1], 'fallback')
 
+    def test_connect_timeout_still_falls_back(self):
+        with mock.patch.object(fetch_article, 'fetch_article_text', side_effect=requests.ConnectTimeout('slow')), \
+             mock.patch.object(fetch_article, '_try_archive_ph', side_effect=requests.Timeout()), \
+             mock.patch.object(fetch_article, '_try_substack_rss', return_value=None), \
+             mock.patch.object(fetch_article, '_try_12ft', side_effect=requests.Timeout()):
+            self.assertEqual(fetch_article.fetch_with_fallbacks('https://example.com/a', 'body', verbose=False)[1], 'fallback')
+
+    def test_process_link_propagates_and_does_not_cache(self):
+        cache = {}
+        with mock.patch.object(main, 'fetch_with_fallbacks', side_effect=fetch_article.NetworkDown('down')):
+            with self.assertRaises(fetch_article.NetworkDown):
+                main.process_link({'url': 'https://example.com/a', 'title': 't'}, 'body', 'prompt', cache)
+        self.assertEqual(cache, {})
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from gmail_auth import get_gmail_service          # noqa: E402  (needs load_dotenv() first)
-from fetch_article import fetch_with_fallbacks    # noqa: E402
+from fetch_article import fetch_with_fallbacks, NetworkDown    # noqa: E402
 from local_llm import generate, strip_thinking, strip_preamble  # noqa: E402
 
 SUMMARIES_DIR       = os.path.expanduser('~/Documents/email-summarized-skills')
@@ -393,6 +393,8 @@ def process_link(link, body, summary_prompt, cache):
 
     try:
         content, source, hit_paywall = fetch_with_fallbacks(link['url'], body)
+    except NetworkDown:
+        raise   # no network: abort the run so the cursor stays put and the emails are retried
     except Exception as exc:
         return 'fallback', False, f"{FAILED_PREFIX}: fetch failed: {exc})*"
     try:
@@ -682,7 +684,12 @@ if __name__ == '__main__':
                                       f"{len(all_links)} articles.*\n\n")
 
                         for link, future in zip(capped, payload):
-                            source, hit_paywall, summary = future.result()
+                            try:
+                                source, hit_paywall, summary = future.result()
+                            except NetworkDown as exc:
+                                print(f"\n✗ {exc}\n  Aborting without moving the cursor; the emails will be retried next run.")
+                                save_article_cache(article_cache)
+                                sys.exit(1)
                             if is_skipped(summary):
                                 filtered_rows.append({
                                     'sender': sender_name, 'subject': em['subject'],

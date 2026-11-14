@@ -204,6 +204,10 @@ def _medium_fetch(url, cookies, timeout):
     return re.sub(r'\s+', ' ', text).strip()
 
 
+class NetworkDown(Exception):
+    """The direct fetch could not connect at all (DNS failure, no route)."""
+
+
 def fetch_with_fallbacks(url, fallback_text="", verbose=True):
     """
     Fetch article text, trying a direct fetch then archive.ph / Substack RSS
@@ -263,6 +267,14 @@ def fetch_with_fallbacks(url, fallback_text="", verbose=True):
             return text, 'direct', False
         log("  Paywall detected.")
         hit_paywall = True
+    except requests.ConnectionError as e:
+        if isinstance(e, (requests.exceptions.SSLError, requests.exceptions.ConnectTimeout,
+                          requests.exceptions.ProxyError)):
+            log(f"  -> failed: {e}")   # this site's problem (cert, slow accept), not our network
+        else:
+            # DNS/no route: our network is down. Raise so the caller does not
+            # cache the email-body fallback as if the article were unreachable.
+            raise NetworkDown(f"network unreachable fetching {url}: {e}") from e
     except Exception as e:
         log(f"  -> failed: {e}")
 
