@@ -13,6 +13,17 @@ LOG="$HOME/Library/Logs/mail-summarizer-watchdog.log"
 OLD_PID=$(cat "$LOCK_DIR/pid" 2>/dev/null)
 [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null && exit 0
 
+# Self-heal: an OS update (or anything else) can drop the main agent from
+# launchd while its plist stays on disk. Re-load it; RunAtLoad starts a run.
+SVC="gui/$(id -u)/com.dron.mail-summarizer"
+if ! launchctl print "$SVC" >/dev/null 2>&1; then
+    if launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.dron.mail-summarizer.plist" 2>>"$LOG"; then
+        echo "$(date '+%F %T') main agent was not loaded; re-bootstrapped it" >> "$LOG"
+    else
+        echo "$(date '+%F %T') main agent not loaded and bootstrap failed" >> "$LOG"
+    fi
+fi
+
 LAST=$(cat "$OK_FILE" 2>/dev/null || echo 0)
 [[ $LAST =~ ^[0-9]+$ ]] || LAST=0   # a corrupt stamp counts as "never succeeded"
 AGE=$(( $(date +%s) - LAST ))
